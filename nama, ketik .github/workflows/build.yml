@@ -1,0 +1,54 @@
+name: Build dari ZIP
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: "editor atau game"
+        type: choice
+        options: [editor, game]
+        default: editor
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Ekstrak ZIP
+        run: |
+          unzip -q KyznStudio-v0.2.0.zip
+          if [ "${{ inputs.mode }}" = "game" ]; then cp game/main.scene.json game/publish.json KyznStudio/game/; fi
+      - name: Tes inti C++
+        run: cd KyznStudio && bash tests/run_tests.sh
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: android-actions/setup-android@v3
+      - name: Pasang SDK dan NDK
+        run: |
+          yes | sdkmanager --licenses > /dev/null || true
+          sdkmanager "platforms;android-34" "build-tools;34.0.0" "ndk;26.1.10909125" "cmake;3.22.1"
+      - uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.7'
+      - name: Build APK editor
+        if: inputs.mode == 'editor'
+        working-directory: KyznStudio
+        run: gradle --no-daemon assembleDebug
+      - name: Build game
+        if: inputs.mode == 'game'
+        working-directory: KyznStudio
+        run: |
+          sudo apt-get install -y jq > /dev/null
+          P=game/publish.json
+          ORI=$(jq -r .orientation $P); [ "$ORI" = "auto" ] && ORI=sensor
+          TASK=assembleRelease; [ "$(jq -r .format $P)" = "aab" ] && TASK=bundleRelease
+          gradle --no-daemon $TASK -PwithGame=true \
+            -PappId="$(jq -r .package $P)" -PappLabel="$(jq -r .appName $P)" \
+            -PappVersionCode="$(jq -r .versionCode $P)" -PappVersionName="$(jq -r .versionName $P)" \
+            -PminSdk="$(jq -r .minSdk $P)" -PtargetSdk="$(jq -r .targetSdk $P)" -PappOrientation="$ORI"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hasil-build
+          path: |
+            KyznStudio/app/build/outputs/apk/*/*.apk
+            KyznStudio/app/build/outputs/bundle/release/*.aab
